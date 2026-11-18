@@ -150,8 +150,9 @@ test_source_distribution() {
   cargo build
   cargo test --profile=ci --all --features=avro
 
-  if ( find -iname 'Cargo.toml' | xargs grep SNAPSHOT ); then
-    echo "Cargo.toml version should not contain SNAPSHOT for releases"
+  if ( find . -iname 'Cargo.toml' -print0 \
+       | xargs -0 grep -E '^version[[:space:]]*=[[:space:]]*"[^"]*-dev"' ); then
+    echo "Cargo.toml version should not contain -dev for releases"
     exit 1
   fi
 
