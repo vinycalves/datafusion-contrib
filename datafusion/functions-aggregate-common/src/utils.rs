@@ -163,6 +163,63 @@ impl<T: DecimalType> DecimalAverager<T> {
     }
 }
 
+/// Returns the precision of a decimal [`DataType`], or `None` when the type is
+/// not a decimal.
+pub fn decimal_precision(data_type: &DataType) -> Option<u8> {
+    match data_type {
+        DataType::Decimal32(precision, _)
+        | DataType::Decimal64(precision, _)
+        | DataType::Decimal128(precision, _)
+        | DataType::Decimal256(precision, _) => Some(*precision),
+        _ => None,
+    }
+}
+
+/// Adds two unscaled decimal values, erroring when the sum does not fit in a
+/// decimal with `precision` digits.
+///
+/// Integer sums keep their documented wrapping behavior; decimal sums are
+/// checked, matching scalar decimal arithmetic and `AVG`.
+pub fn add_decimal_checked<T: ArrowNativeTypeOp>(
+    lhs: T,
+    rhs: T,
+    precision: u8,
+) -> Result<T> {
+    let Ok(result) = lhs.add_checked(rhs) else {
+        return exec_err!("Arithmetic Overflow in SumAccumulator");
+    };
+    check_decimal_precision(result, precision)
+}
+
+/// Subtracts two unscaled decimal values, erroring when the result does not
+/// fit in a decimal with `precision` digits.
+///
+/// See [`add_decimal_checked`] for the rationale.
+pub fn sub_decimal_checked<T: ArrowNativeTypeOp>(
+    lhs: T,
+    rhs: T,
+    precision: u8,
+) -> Result<T> {
+    let Ok(result) = lhs.sub_checked(rhs) else {
+        return exec_err!("Arithmetic Overflow in SumAccumulator");
+    };
+    check_decimal_precision(result, precision)
+}
+
+/// Errors when an unscaled decimal value needs more than `precision` digits.
+fn check_decimal_precision<T: ArrowNativeTypeOp>(value: T, precision: u8) -> Result<T> {
+    // 10^precision is the smallest magnitude that does not fit. It is
+    // representable for every decimal width, but `pow_checked` is still used
+    // defensively.
+    if let Some(bound) = T::from_usize(10)
+        && let Ok(bound) = bound.pow_checked(precision as u32)
+        && (value.compare(bound).is_ge() || value.compare(bound.neg_wrapping()).is_le())
+    {
+        return exec_err!("Arithmetic Overflow in SumAccumulator");
+    }
+    Ok(value)
+}
+
 /// Generic way to collect distinct values for accumulators.
 ///
 /// The intermediate state is represented as a List of scalar values updated by
